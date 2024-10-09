@@ -26,7 +26,7 @@ RESOURCE_PATHS = {
     "timelines": "timelines",
     "rooms": "rooms"
 }
-RESOURCE_NAMES = {
+RESOURCE_TAG_NAMES = {
     "datafiles": "datafile",
     "sounds": "sound",
     "sprites": "sprite",
@@ -60,7 +60,8 @@ if argument_number < 2:
     print("""################## GMCOLLAGE ##################
 Usage: py gmcollage.py <project.gmx> in/out <module folder/.moduleconfig> <OPTIONAL SWITCHES>
 Providing multiple module/moduleconfig paths can be done with using spaces
--o <DIR>   | Module output directory (OUT only)
+-o <DIR>    | Module output directory (OUT only)
+-t          | Run checks only (no copying files or modifying project file)
 
 The .moduleconfig format used in \"out\" mode is a json list containing the name of the resource type, and resource folder path:
 [
@@ -98,6 +99,7 @@ if argument_number < 4:
 argument_index = 3
 paths = []
 module_output_directory = "modules"
+test_mode = False
 while argument_index < argument_number:
     arg = sys.argv[argument_index]
     if len(arg) == 0:
@@ -117,6 +119,11 @@ while argument_index < argument_number:
                     if not os.path.isdir(module_output_directory):
                         print("Log: Created module output directory at", module_output_directory)
                         os.makedirs(module_output_directory)
+            case 't':
+                if test_mode:
+                    print("Error: No need to pass test flag \"-t\" more than once")
+                    sys.exit()
+                test_mode = True
             case 'c':
                 pass # TODO: copy resources from module directory instead of moving ("in-only")
             case 'l':
@@ -135,9 +142,7 @@ while argument_index < argument_number:
     
     argument_index += 1
 
-gmx_path_split = gmx_path.split("/")
-gmx_path_split.pop(-1)
-gmx_directory = "".join(gmx_path_split) + "/"
+gmx_directory = "".join(gmx_path.split("/")[:-1]) + "/"
 
 def gmcollage_out():
     moduleconfig_paths = paths
@@ -231,7 +236,7 @@ def gmcollage_out():
             if folder == None:
                 module_parts_missing.append(mp)
                 continue
-            resources = folder.iter(RESOURCE_NAMES[mp.resource_type])
+            resources = folder.iter(RESOURCE_TAG_NAMES[mp.resource_type])
             if resources == None:
                 print("Warning: Empty module folder '" + mp.resource_type + "/" + mp.resource_path + "'", "in", mp.module_path)
             mp.module_resources_iterator = resources
@@ -252,6 +257,9 @@ def gmcollage_out():
 
     if error_state:
         sys.exit()
+
+    if test_mode:
+        return
 
     for i in range(moduleconfig_number):
         for mp in moduleconfig_parts_grouped[i]:
@@ -280,7 +288,7 @@ def gmcollage_in():
     
     gmx_resources = []
     module_resources = []
-    for key, name in RESOURCE_NAMES.items():
+    for key, name in RESOURCE_TAG_NAMES.items():
         if name == "datafile":
             continue
         for resource in gmx_tree.iter(name):
@@ -302,25 +310,28 @@ def gmcollage_in():
 
     for module_tree in module_trees:
         for part in module_tree.iter("part"):
-            full_resource_path = part.get("resource_type") + "/" + part.get("resource_path")
-            gmx_folder = gmx_root.find(full_resource_path)
-            # TODO: When there is none of a resource the tag vanishes from the project file. That will cause this error
-            if gmx_folder != None: #TODO: Append resources and subfolders into existing folder instead of stopping
-                error_state = True
-                print("Error: Folder '" + path + "'(" + module_names[0] + ") already exists in project. Rename or remove it.")
+            gmx_resource_folder = gmx_root.find(part.get("resource_type"))
+            resource_parent_path_parts = part.get("resource_path").split("/")[:-1]
+            resource_parent_path = "/".join(resource_parent_path_parts)
+            
+            if resource_parent_path == "":
+                gmx_resource_folder.append(part.find("*"))
                 continue
-            resource_parent_path = full_resource_path.split("/")
-            resource_parent_path.pop()
-            resource_parent_path = "/".join(resource_parent_path)
-            gmx_folder = gmx_root.find(resource_parent_path)
-            if gmx_folder == None:
-                error_state = True
-                print("Error: Module '" + module_names[0] + "' requires folder", resource_parent_path, "to exist in the project file")
-                continue
-            gmx_folder.append(part.find("*"))
+            
+            for resource_parent_path_part in resource_parent_path_parts:
+                gmx_resource_subfolder = gmx_resource_folder.find(part.get("resource_type") + "[@name='" + resource_parent_path_part + "']")
+                if gmx_resource_subfolder == None:
+                    gmx_resource_subfolder = ET.SubElement(gmx_resource_folder, part.get("resource_type"))
+                    gmx_resource_subfolder.set("name", resource_parent_path_part)
+                gmx_resource_folder = gmx_resource_subfolder
+
+            gmx_resource_folder.append(part.find("*"))
 
     if error_state:
         sys.exit()
+
+    if test_mode:
+        return
 
     for key, resource_path in RESOURCE_PATHS.items():
         for filename in os.listdir(module_dirs[0] + "/" + resource_path):
@@ -332,7 +343,12 @@ def gmcollage_in():
 
 if program_mode == "out":
     gmcollage_out()
-    print("Log: Successfully took out modules", str(paths))
+    if not test_mode:
+        print("Log: Successfully took out modules", str(paths))
 elif program_mode == "in":
     gmcollage_in()
-    print("Log: Successfully put in", str(paths))
+    if not test_mode:
+        print("Log: Successfully put in", str(paths))
+
+if test_mode:
+    print("Log: Test mode finished without errors")
